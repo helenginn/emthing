@@ -1,0 +1,10 @@
+cloc.sh
+cloc.txt
+
+
+build
+data
+tags
+
+*.sw?
+
