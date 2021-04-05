@@ -24,9 +24,11 @@
 #include <QThread>
 
 class Density2GL;
+class Dictator;
 class Icosahedron;
 class Trace;
-
+class Aligner;
+class DistortMap; typedef boost::shared_ptr<DistortMap> DistortMapPtr;
 
 class DensityDisplay : public SlipGL
 {
@@ -35,8 +37,16 @@ public:
 	DensityDisplay(QWidget *parent);
 
 	void addDensity(VagFFTPtr fft);
+	
+	void setDictator(Dictator *dict)
+	{
+		_dictator = dict;
+	}
+	
+	void alignLast();
 public slots:
-	void startTrace();
+	void centre();
+	void alignDensities();
 	void done();
 signals:
 	void begin();
@@ -45,13 +55,19 @@ protected:
 	virtual void mouseReleaseEvent(QMouseEvent *e);
 	virtual void mouseMoveEvent(QMouseEvent *e);
 private:
+	void startNextAlignment();
 	bool prepareWorkForObject(QObject *object);
 	void rightClickMenu(QPoint p);
-	Density2GL *_density;
+	std::vector<Density2GL *> _densities;
+	std::vector<DistortMapPtr> _ffts;
+	std::vector<Aligner *> _alignables;
+	Density2GL * _density;
 	Icosahedron *_ico;
-	VagFFTPtr _fft;
+	DistortMapPtr _fft;
 	QThread *_worker;
 	Trace *_activeTrace;
+	Aligner *_align;
+	Dictator *_dictator;
 
 };
 

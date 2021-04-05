@@ -16,24 +16,34 @@
 // 
 // Please email: vagabond @ hginn.co.uk for more details.
 
-#ifndef __em__VolumeView__
-#define __em__VolumeView__
+#ifndef __em__Control__
+#define __em__Control__
 
-#include <QMainWindow>
+#include <h3dsrc/Dictator.h>
 
 class DensityDisplay;
+class VolumeView;
 
-class VolumeView : public QMainWindow
+class Control : public Dictator
 {
 public:
-	VolumeView(QWidget *parent);
+	Control();
 
-	void addMRCin(std::string mrc);
-	void addCommand(std::string command);
-	void start();
+	void setView(VolumeView *view)
+	{
+		_view = view;
+	}
+
+	void setDisplay(DensityDisplay *display)
+	{
+		_display = display;
+	}
+
+protected:
+	virtual bool processRequest(std::string first, std::string last);
 private:
+	VolumeView *_view;
 	DensityDisplay *_display;
-	std::vector<std::string> _args;
 
 };
 

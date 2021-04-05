@@ -20,6 +20,7 @@
 #include "MRCin.h"
 #include "DensityDisplay.h"
 #include <libsrc/FFT.h>
+#include "Control.h"
 
 VolumeView::VolumeView(QWidget *parent) : QMainWindow(parent)
 {
@@ -31,9 +32,24 @@ VolumeView::VolumeView(QWidget *parent) : QMainWindow(parent)
 
 }
 
+void VolumeView::addCommand(std::string command)
+{
+	_args.push_back(command);
+}
+
 void VolumeView::addMRCin(std::string mrc)
 {
 	MRCin *in = new MRCin(mrc, true);
 	VagFFTPtr fft = in->getVolume();
 	_display->addDensity(fft);
+}
+
+void VolumeView::start()
+{
+	Control *c = new Control();
+	c->setView(this);
+	c->setDisplay(_display);
+	c->setArgs(_args);
+	_display->setDictator(c);
+	c->run();
 }

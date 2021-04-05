@@ -12,8 +12,8 @@ int main(int argc, char * argv[])
 	QSurfaceFormat fmt;
 	if (QOpenGLContext::openGLModuleType() == QOpenGLContext::LibGL) 
 	{
-		std::cout << "OpenGL 3.3 context" << std::endl;
-		fmt.setVersion(3, 3);
+		std::cout << "OpenGL 4.0 context" << std::endl;
+		fmt.setVersion(4, 0);
 		fmt.setProfile(QSurfaceFormat::CoreProfile);
 	}
 	else 
@@ -42,11 +42,11 @@ int main(int argc, char * argv[])
 	
 	for (int i = 1; i < argc; i++)
 	{
-		std::string mrc = argv[i];
-		view.addMRCin(mrc);
+		std::string com = argv[i];
+		view.addCommand(com);
 	}
 	
-	view.show();
+	view.start();
 
 	int status = app.exec();
 	

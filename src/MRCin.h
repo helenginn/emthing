@@ -21,6 +21,7 @@
 
 class MRCImage;
 #include <libsrc/shared_ptrs.h>
+#include <hcsrc/vec3.h>
 
 class MRCin
 {
@@ -51,6 +52,7 @@ public:
 	
 	VagFFTPtr getVolume();
 private:
+	void cropLimits(VagFFTPtr original, vec3 *min, vec3 *max);
 	void process();
 	void prepareDataForImages();
 	std::string _filename;

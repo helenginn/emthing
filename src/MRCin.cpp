@@ -22,6 +22,7 @@
 #include <sstream>
 #include <hcsrc/FileReader.h>
 #include <libsrc/FFT.h>
+#include "Control.h"
 #include "MRCin.h"
 #include "MRCImage.h"
 #include "libccp4/ccp4_spg.h"
@@ -85,20 +86,23 @@ void MRCin::process()
 		std::cout << "Unknown" << std::endl;
 		break;
 	}
+
+	file.seekg(28);
+	int sx, sy, sz;
+	file.read(reinterpret_cast<char *>(&sx), sizeof(int));
+	file.read(reinterpret_cast<char *>(&sy), sizeof(int));
+	file.read(reinterpret_cast<char *>(&sz), sizeof(int));
 	
 	float a, b, c;
 	file.read(reinterpret_cast<char *>(&a), sizeof(float));
 	file.read(reinterpret_cast<char *>(&b), sizeof(float));
 	file.read(reinterpret_cast<char *>(&c), sizeof(float));
 	
-	if (a <= 1e-6) a = 1;
-	if (b <= 1e-6) b = 1;
-	if (c <= 1e-6) c = 1;
-	
-	_a = a; _b = b; _c = c;
+	std::cout << "Sampling: " << sx << " " << sy << " " << sz << std::endl;
+	_a = a / (float)sx; _b = b / (float)sy; _c = c / (float)sz;
 
-	std::cout << "Cell edges (Å): " << a << " " << b << " " 
-	<< c << std::endl;
+	std::cout << "Cell edges (Å): " << _a << " " << _b << " " 
+	<< _c << std::endl;
 	
 	file.seekg(208);
 	char filetype[5];
@@ -165,6 +169,37 @@ void MRCin::prepareDataForImages()
 	}
 }
 
+void MRCin::cropLimits(VagFFTPtr o, vec3 *min, vec3 *max)
+{
+	*max = empty_vec3();
+	*min = make_vec3(o->nx(), o->ny(), o->nz());
+	
+	double mean, sigma;
+	o->meanSigma(&mean, &sigma);
+
+	for (int z = 0; z < o->nz(); z++)
+	{
+		for (int y = 0; y < o->ny(); y++)
+		{
+			for (int x = 0; x < o->nx(); x++)
+			{
+				float real = o->getReal(x, y, z);
+				real = (real - mean) / sigma;
+				
+				if (real > 4)
+				{
+					if (min->x > x) min->x = x;
+					if (min->y > y) min->y = y;
+					if (min->z > z) min->z = z;
+					if (max->x < x) max->x = x;
+					if (max->y < y) max->y = y;
+					if (max->z < z) max->z = z;
+				}
+			}
+		}
+	}
+}
+
 VagFFTPtr MRCin::getVolume()
 {
 	VagFFTPtr fft = VagFFTPtr(new VagFFT(_nx, _ny, _nz));
@@ -178,22 +213,48 @@ VagFFTPtr MRCin::getVolume()
 	uc.push_back(90);
 	uc.push_back(90);
 	uc.push_back(90);
-	
-	int dx = _nx / 3;
-	int dy = _ny / 3;
-	int dz = _nz / 3;
 
 	fft->setUnitCell(uc);
 	fft->setStatus(FFTRealSpace);
-//	fft->makePlans();
-	
+
 	for (size_t i = 0; i < _values.size(); i++)
 	{
 		fft->setElement(i, _values[i], 0);
 	}
 	
-	VagFFTPtr sub = fft->subFFT(dx, 2 * dx, dy, 2 * dy, dz, 2 * dz);
+	double fraction = atof(Control::valueForKey("crop-fraction").c_str());
+	std::cout << "Cropping image: ";
+	vec3 min, max;
+	
+	if (fraction < 1e-6 || fraction > 1.00001)
+	{
+		std::cout << "determining crop limits automatically..." << std::endl;
+		cropLimits(fft, &min, &max);
+		vec3 diff = make_vec3(30, 30, 30);
+		vec3_subtract_from_vec3(&min, diff);
+		vec3_add_to_vec3(&max, diff);
+	}
+	else
+	{
+		std::cout << "using fraction " << fraction << " ... " << std::endl;
+		vec3 size = make_vec3(fft->nx(), fft->ny(), fft->nz());
+		vec3 middle = size;
+		vec3_mult(&middle, 0.5);
+		vec3 keep = middle;
+		vec3_mult(&keep, fraction);
+		min = vec3_subtract_vec3(middle, keep);
+		max = vec3_add_vec3(middle, keep);
+	}
+
+	std::cout << "Minimum: " << vec3_desc(min) << std::endl;
+	std::cout << "Maximum: " << vec3_desc(max) << std::endl;
+
+	std::cout << "From " << min.x << " " << min.y << " " << min.z << " to "
+	<< max.x << " " << max.y << " " << max.z << std::endl;
+	
+	VagFFTPtr sub = fft->subFFT(min.x, max.x, min.y, max.y, min.z, max.z);
 	sub->setStatus(FFTRealSpace);
+	std::cout << "Cube length: " << sub->getCubicScale() / sub->nx() <<  std::endl;
 	
 	return sub;
 }
