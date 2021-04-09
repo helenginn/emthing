@@ -41,6 +41,8 @@ public:
 
 protected:
 	virtual bool processRequest(std::string first, std::string last);
+	virtual void help();
+	virtual void finished();
 private:
 	VolumeView *_view;
 	DensityDisplay *_display;

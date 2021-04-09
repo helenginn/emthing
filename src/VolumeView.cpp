@@ -22,6 +22,8 @@
 #include <libsrc/FFT.h>
 #include "Control.h"
 
+class DistortMap; typedef boost::shared_ptr<DistortMap> DistortMapPtr;
+
 VolumeView::VolumeView(QWidget *parent) : QMainWindow(parent)
 {
 	_display = new DensityDisplay(this);
@@ -40,7 +42,7 @@ void VolumeView::addCommand(std::string command)
 void VolumeView::addMRCin(std::string mrc)
 {
 	MRCin *in = new MRCin(mrc, true);
-	VagFFTPtr fft = in->getVolume();
+	DistortMapPtr fft = in->getVolume();
 	_display->addDensity(fft);
 }
 

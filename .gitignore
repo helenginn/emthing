@@ -1,6 +1,9 @@
 cloc.sh
 cloc.txt
 
+.DS_Store
+install
+
 res
 install-scripts
 

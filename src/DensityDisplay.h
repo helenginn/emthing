@@ -36,7 +36,7 @@ Q_OBJECT
 public:
 	DensityDisplay(QWidget *parent);
 
-	void addDensity(VagFFTPtr fft);
+	void addDensity(DistortMapPtr fft);
 	
 	void setDictator(Dictator *dict)
 	{
@@ -44,6 +44,13 @@ public:
 	}
 	
 	void alignLast();
+	void writeLast(std::string filename);
+	void pictureLast(std::string filename);
+	void correlateLast();
+	void correlateAll(std::string filename);
+	void loadFromFileList(std::string filename);
+	void maskWithPDB(std::string pdb);
+	void dropData();
 public slots:
 	void centre();
 	void alignDensities();

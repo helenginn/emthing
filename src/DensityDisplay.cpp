@@ -21,13 +21,17 @@
 #include "Aligner.h"
 #include <vaggui/Density2GL.h>
 #include <libsrc/FFT.h>
+#include <libsrc/PDBReader.h>
+#include <libsrc/Crystal.h>
 #include "DistortMap.h"
 #include "Control.h"
+#include "MRCin.h"
 #include <h3dsrc/Icosahedron.h>
 #include <hcsrc/FileReader.h>
 #include <hcsrc/maths.h>
 #include <QMenu>
 #include <iostream>
+#include <fstream>
 
 DensityDisplay::DensityDisplay(QWidget *parent) : SlipGL(parent)
 {
@@ -42,11 +46,9 @@ DensityDisplay::DensityDisplay(QWidget *parent) : SlipGL(parent)
 	_worker = NULL;
 }
 
-void DensityDisplay::addDensity(VagFFTPtr vagfft)
+void DensityDisplay::addDensity(DistortMapPtr vagfft)
 {
-	DistortMapPtr fft = DistortMapPtr(new DistortMap(*vagfft));
-	VagFFTPtr toVag = boost::static_pointer_cast<VagFFT>(fft);
-	_fft = fft;
+	_fft = vagfft;
 	_density = new Density2GL();
 	_density->setDims(30, 30, 30);
 	_density->setResolution(1.0);
@@ -64,22 +66,25 @@ void DensityDisplay::addDensity(VagFFTPtr vagfft)
 	_fft->setColour(h, s, v);
 
 	_density->setDefaultColour(h, s, v);
-	_density->makeNewDensity(toVag);
-	addObject(&*fft);
-
-	fft->drawSlice(-1, "drawreal_" + i_to_str(_ffts.size()));
+	_density->makeNewDensity(_fft);
+	addObject(&*_fft);
 
 	addObject(_density);
 	_densities.push_back(_density);
-	_ffts.push_back(fft);
-	
-	if (_ffts.size() == 1)
+	_ffts.push_back(_fft);
+
+	if (_ffts.size() >= 2)
 	{
-		centre();
+		_fft->setReference(_ffts[0]);
+	}
+	
+	if (_fft->hasAuxiliary())
+	{
+		_fft->loadFromAuxiliary();
 	}
 	else
 	{
-		mat3x3 toReal = fft->toReal();
+		mat3x3 toReal = _fft->toReal();
 		std::cout << mat3x3_desc(toReal) << std::endl;
 		mat3x3 target = _ffts[0]->toReal();
 		
@@ -89,7 +94,7 @@ void DensityDisplay::addDensity(VagFFTPtr vagfft)
 		                                  target.vals[8] / 2);
 		vec3_add_to_vec3(&centre_of_target, targo);
 		
-		vec3 myo = fft->origin();
+		vec3 myo = _fft->origin();
 		vec3 my_centre = make_vec3(toReal.vals[0] / 2,
 		                           toReal.vals[4] / 2,
 		                           toReal.vals[8] / 2);
@@ -97,10 +102,13 @@ void DensityDisplay::addDensity(VagFFTPtr vagfft)
 
 		vec3 oriplus = vec3_subtract_vec3(centre_of_target, my_centre);
 
-		vec3_add_to_vec3(&myo, oriplus);
-		_fft->setOrigin(myo);
+		_fft->addToOrigin(oriplus);
 	}
 
+	if (_ffts.size() == 1)
+	{
+		centre();
+	}
 }
 
 void DensityDisplay::correctIco()
@@ -146,9 +154,6 @@ void DensityDisplay::done()
 	
 	if (_align != NULL)
 	{
-		_align->altered()->drawSlice(-1, "drawreal_" +
-		i_to_str(_align->number()) + "_after");
-
 		removeObject(_align);
 
 		if (_alignables.size() > 0)
@@ -250,4 +255,88 @@ bool DensityDisplay::prepareWorkForObject(QObject *object)
 	object->moveToThread(_worker);
 
 	return true;
+}
+
+void DensityDisplay::writeLast(std::string filename)
+{
+	bool dist = (Control::valueForKey("write-distortion") == "true");
+	_ffts.back()->writeMRC(filename, dist);
+}
+
+void DensityDisplay::correlateLast()
+{
+	double cor = _ffts.back()->rotateRoundCentre(make_mat3x3(), 
+	                                              empty_vec3(), _ffts[0]); 
+
+	std::cout << "Correlation with reference: " << cor << std::endl;
+}
+
+void DensityDisplay::correlateAll(std::string prefix)
+{
+	std::string distname = prefix + "_dist_cc.csv";
+	std::ofstream maps, dist;
+	dist.open(distname);
+
+	for (size_t i = 1; i < _ffts.size() - 1; i++)
+	{
+		for (size_t j = i + 1; j < _ffts.size(); j++)
+		{
+			/*
+			double mapcor = _ffts[j]->rotateRoundCentre(make_mat3x3(), 
+			                                             empty_vec3(), _ffts[i]); 
+
+			maps << _ffts[i]->filename() << "," << _ffts[j]->filename() << ","
+			<< mapcor << std::endl;
+			*/
+
+			_ffts[j]->setReference(_ffts[0]);
+			double distcor = _ffts[j]->correlateKeypoints(_ffts[i]);
+
+			dist << _ffts[i]->filename() << "," << _ffts[j]->filename() << ","
+			<< distcor << std::endl;
+		}
+	}
+
+	dist.close();
+}
+
+void DensityDisplay::pictureLast(std::string filename)
+{
+	_ffts.back()->drawSlice(-1, filename);
+}
+
+void DensityDisplay::dropData()
+{
+	_ffts.back()->dropData();
+}
+
+void DensityDisplay::maskWithPDB(std::string pdb)
+{
+	PDBReader reader;
+	reader.setFilename(pdb);
+	CrystalPtr crystal = reader.getCrystal();
+
+	_ffts.back()->maskWithAtoms(crystal);
+}
+
+void DensityDisplay::loadFromFileList(std::string filename)
+{
+	std::string contents = get_file_contents(filename);
+	std::vector<std::string> files = split(contents, '\n');
+	
+	DistortMapPtr map = DistortMapPtr(new DistortMap(0, 0, 0, 0, 0));
+	
+	for (size_t i = 0; i < files.size(); i++)
+	{
+		std::cout << "Loading " << files[i] << std::endl;
+		DistortMapPtr fft = DistortMapPtr(new DistortMap(0, 0, 0, 0, 0));
+		fft->setFilename(files[i]);
+		std::string auxfile = getBaseFilenameWithPath(files[i]) + ".aux";
+		fft->setReference(_ffts[0]);
+		fft->setAuxiliary(auxfile);
+		fft->loadFromAuxiliary();
+		
+		_fft = fft;
+		_ffts.push_back(fft);
+	}
 }

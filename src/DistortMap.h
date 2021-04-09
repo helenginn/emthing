@@ -22,12 +22,42 @@
 #include <libsrc/FFT.h>
 #include <h3dsrc/Icosahedron.h>
 
+class DistortMap; typedef boost::shared_ptr<DistortMap> DistortMapPtr;
+class AtomGroup; typedef boost::shared_ptr<AtomGroup> AtomGroupPtr;
+
 class DistortMap : public SlipObject, public VagFFT
 {
 public:
 	DistortMap(VagFFT &fft, int scratches = 0);
+	DistortMap(int nx, int ny, int nz, int nele, int scratches);
+	
+	void maskWithAtoms(AtomGroupPtr atoms);
 
 	void makeKeypoints(double distance);
+	
+	void setAuxiliary(std::string aux)
+	{
+		_aux = aux;
+	}
+	
+	bool hasAuxiliary()
+	{
+		return (_aux.length() > 0);
+	}
+
+	void setFilename(std::string f)
+	{
+		_filename = f;
+	}
+	
+	std::string filename()
+	{
+		return _filename;
+	}
+	
+	double correlateKeypoints(DistortMapPtr other);
+
+	void loadFromAuxiliary();
 	
 	virtual double cubic_interpolate(vec3 vox000, size_t im = false);
 	
@@ -35,6 +65,8 @@ public:
 	{
 		vec3 start;
 		vec3 shift;
+		double correlation;
+		double density;
 		size_t vertex;
 	};
 	
@@ -43,13 +75,31 @@ public:
 		_r = r; _g = g; _b = b;
 	}
 
-	void refineKeypoints(VagFFTPtr ref);
-	void writeMRC(std::string filename);
+	void refineKeypoints(DistortMapPtr ref);
+	void writeMRC(std::string filename, bool withDistortion = false);
+	void dropData();
+	
+	void setFocus(bool f)
+	{
+		_focus = f;
+	}
+	
+	void setReference(DistortMapPtr ref)
+	{
+		_reference = ref;
+	}
+
+	double rotateRoundCentre(mat3x3 reindex, vec3 add, 
+	                         DistortMapPtr other = DistortMapPtr(), 
+	                         double scale = 1, bool write = false);
 private:
+	vec3 motion(vec3 real, std::vector<Keypoint *> &points, double *weights);
 	void refineKeypoint(int i);
 	double sscore();
-	double aveSigma();
+	double aveSigma(bool ref = false);
+	void prepareKeypoints();
 	void get_limits(vec3 cur, double dist, vec3 *min, vec3 *max);
+	void writeAuxiliary(std::string filename);
 
 	static double score(void *object)
 	{
@@ -60,14 +110,21 @@ private:
 	void addIcosahedron();
 	
 	std::vector<Keypoint> _keypoints;
+	std::vector<double> _aveDensities;
 	std::vector<Keypoint *> _closest;
 	std::vector<std::vector<Keypoint *> > _nnMap;
 	Icosahedron *_ico;
 
 	vec3 _current;
+	std::string _aux;
+	std::string _filename;
+	bool _focus;
 	double _distance;
 	double _r, _g, _b;
-	VagFFTPtr _reference;
+	DistortMapPtr _reference;
+	vec3 _trans;
+	
+	std::vector<int> _pdbMask;
 };
 
 typedef boost::shared_ptr<DistortMap> DistortMapPtr;

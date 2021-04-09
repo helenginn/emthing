@@ -154,7 +154,7 @@ bool View::getMRC()
 void View::addMRCin(std::string filename)
 {
 	MRCin *in = new MRCin(filename);
-	MRCImage *im = in->image(0);
+//	MRCImage *im = in->image(0);
 
 	QTreeWidgetItem *top = _tree->topLevelItem(0);
 	ParticleGroup *group = static_cast<ParticleGroup *>(top);

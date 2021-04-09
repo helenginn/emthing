@@ -21,9 +21,25 @@
 #include <h3dsrc/shaders/fStructure.h>
 #include <hcsrc/RefinementNelderMead.h>
 #include <hcsrc/maths.h>
+#include <hcsrc/FileReader.h>
+#include <libsrc/AtomGroup.h>
+#include <libsrc/Atom.h>
 #include <hcsrc/Any.h>
 #include <iostream>
 #include <fstream>
+#include <fftw3.h>
+
+DistortMap::DistortMap(int nx, int ny, int nz, int nele, int scratches)
+: VagFFT(nx, ny, nz, nele, scratches)
+{
+	_vString = Structure_vsh();
+	_fString = Structure_fsh();
+	_ico = new Icosahedron();
+	_trans = empty_vec3();
+	_ico->setColour(1., 0., 0);
+	_distance = 50;
+	_focus = false;
+}
 
 DistortMap::DistortMap(VagFFT &fft, int scratch) : VagFFT(fft, scratch)
 {
@@ -31,7 +47,7 @@ DistortMap::DistortMap(VagFFT &fft, int scratch) : VagFFT(fft, scratch)
 	_fString = Structure_fsh();
 	_ico = new Icosahedron();
 	_ico->setColour(1., 0., 0);
-	_distance = 0;
+	_distance = 50;
 }
 
 void DistortMap::addIcosahedron()
@@ -50,7 +66,6 @@ void DistortMap::addIcosahedron()
 void DistortMap::makeKeypoints(double d)
 {
 	bool shift_x = false;
-	bool shift_xy = false;
 	std::vector<double> uc = getUnitCell();
 	vec3 o = origin();
 
@@ -80,12 +95,18 @@ void DistortMap::makeKeypoints(double d)
 		shift_x = !shift_x;
 	}
 	
-	std::cout << "Number of keypoints: " << _keypoints.size() << std::endl;
-
-	setColour(_r, _g, _b);
-	_nnMap.resize(nn());
+	prepareKeypoints();
 	
 	_distance = d;
+}
+
+void DistortMap::prepareKeypoints()	
+{
+	std::cout << "Number of keypoints: " << _keypoints.size() << std::endl;
+
+	vec3 o = origin();
+	setColour(_r, _g, _b);
+	_nnMap.resize(nn());
 	
 	for (int z = 0; z < nz(); z++)
 	{
@@ -119,31 +140,10 @@ void DistortMap::closestPoints(vec3 real)
 	}
 }
 
-double DistortMap::cubic_interpolate(vec3 vox000, size_t im)
+vec3 DistortMap::motion(vec3 real, std::vector<Keypoint *> &points,
+                        double *weights)
 {
-	if (_keypoints.size() == 0)
-	{
-		return VagFFT::cubic_interpolate(vox000, im);
-	}
-
-	collapse(&vox000.x, &vox000.y, &vox000.z);
-	int ele = element(vox000.x, vox000.y, vox000.z);
-	if (ele >= _nnMap.size())
-	{
-		std::cout << "Ele over nnMap!" << std::endl;
-	}
-	std::vector<Keypoint *> points = _nnMap[ele];
-	if (points.size() == 0)
-	{
-		return VagFFT::cubic_interpolate(vox000, im);
-	}
-	
-	vec3 real = vox000;
-	mat3x3_mult_vec(getRealBasis(), &real);
-	vec3 o = origin();
-	vec3_add_to_vec3(&real, o);
-	
-	double weights = 0;
+	*weights = 0;
 	vec3 total_motion = empty_vec3();
 
 	for (size_t i = 0; i < points.size(); i++)
@@ -155,15 +155,57 @@ double DistortMap::cubic_interpolate(vec3 vox000, size_t im)
 		vec3 sh = points[i]->shift;
 		vec3_mult(&sh, weight);
 		vec3_add_to_vec3(&total_motion, sh);
-		weights += weight;
+		*weights += weight;
 	}
+
+	vec3_mult(&total_motion, 1 / *weights);
+	return total_motion;
+}
+
+double DistortMap::cubic_interpolate(vec3 vox000, size_t im)
+{
+	if ((vox000.x < 0 || vox000.y < 0 || vox000.z < 0) &&
+	    _status == FFTRealSpace)
+	{
+		return 0;
+	}
+
+	if ((vox000.x >= nx() || vox000.y >= ny() || vox000.z >= nz()) &&
+	    _status == FFTRealSpace)
+	{
+		return 0;
+	}
+
+	if (_keypoints.size() == 0)
+	{
+		return VagFFT::cubic_interpolate(vox000, im);
+	}
+
+	int ele = element(vox000.x, vox000.y, vox000.z);
+	if (ele >= _nnMap.size())
+	{
+		std::cout << "Ele over nnMap!" << std::endl;
+	}
+	std::vector<Keypoint *> points = _nnMap[ele];
+
+	if (points.size() == 0)
+	{
+		return VagFFT::cubic_interpolate(vox000, im);
+	}
+	
+	vec3 real = vox000;
+	mat3x3_mult_vec(getRealBasis(), &real);
+	vec3 o = origin();
+	vec3_add_to_vec3(&real, o);
+	
+	double weights = 0;
+	vec3 total_motion = motion(real, points, &weights);
 	
 	if (weights <= 0)
 	{
 		return VagFFT::cubic_interpolate(vox000, im);
 	}
 
-	vec3_mult(&total_motion, 1 / weights);
 	vec3_add_to_vec3(&total_motion, real);
 	vec3_subtract_from_vec3(&total_motion, o);
 	mat3x3_mult_vec(getRecipBasis(), &total_motion);
@@ -171,17 +213,70 @@ double DistortMap::cubic_interpolate(vec3 vox000, size_t im)
 	return VagFFT::cubic_interpolate(total_motion, im);
 }
 
+double DistortMap::correlateKeypoints(DistortMapPtr other)
+{
+	double dots = 0;
+	double xs = 0; double ys = 0;
+	
+	for (size_t i = 0; i < _keypoints.size(); i++)
+	{
+		vec3 pos = _keypoints[i].start;
+		
+		double density = _keypoints[i].density;
+		if (density <= 0)
+		{
+			continue;
+		}
+
+		closestPoints(pos);
+		std::vector<Keypoint *> myPoints = _closest;
+		if (myPoints.size() == 0)
+		{
+			continue;
+		}
+
+		other->closestPoints(pos);
+		std::vector<Keypoint *> points = other->_closest;
+		
+		if (points.size() == 0)
+		{
+			continue;
+		}
+		
+		double my_weight = 0;
+		double other_weight = 0;
+
+		vec3 my_mot = motion(pos, myPoints, &my_weight);
+
+		vec3 other_mot = other->motion(pos, points, &other_weight);
+		
+		double correl = _keypoints[i].correlation;
+
+		vec3_mult(&my_mot, correl);
+		vec3_mult(&other_mot, correl);
+		
+		double dot = vec3_dot_vec3(my_mot, other_mot);
+		dots += dot;
+		xs += vec3_sqlength(my_mot);
+		ys += vec3_sqlength(other_mot);
+	}
+	
+	double cc = dots / (sqrt(xs) * sqrt(ys));
+	return cc;
+}
+
 void DistortMap::get_limits(vec3 cur, double dist, vec3 *min, vec3 *max)
 {
-	double scale = 1;
+	double scale = 2.0;
 	vec3 padding = make_vec3(dist/scale, dist/scale, dist/scale);
-	*max = vec3_add_vec3(cur, padding);
-	*min = vec3_subtract_vec3(cur, padding);
+	vec3 no_orig = vec3_subtract_vec3(cur, _origin);
+	*max = vec3_add_vec3(no_orig, padding);
+	*min = vec3_subtract_vec3(no_orig, padding);
 	mat3x3_mult_vec(getRecipBasis(), min);
 	mat3x3_mult_vec(getRecipBasis(), max);
 }
 
-double DistortMap::aveSigma()
+double DistortMap::aveSigma(bool ref)
 {
 	double mean, sigma;
 	meanSigma(&mean, &sigma);
@@ -206,6 +301,7 @@ double DistortMap::aveSigma()
 	
 	return total / count;
 }
+
 
 double DistortMap::sscore()
 {
@@ -234,7 +330,7 @@ double DistortMap::sscore()
 				mat3x3_mult_vec(getRealBasis(), &ijk); /* to Angstroms */
 				vec3_add_to_vec3(&ijk, o); /* in Angstroms */
 				vec3_subtract_from_vec3(&ijk, ro); /*in Angstroms*/
-				mat3x3_mult_vec(recipBasis, &ijk); /* to Voxels */
+				mat3x3_mult_vec(recipBasis, &ijk); /* to other Voxels */
 				double r1 = _reference->cubic_interpolate(ijk, 0);
 
 				add_to_CD(&cd, r0, r1);
@@ -250,12 +346,19 @@ void DistortMap::refineKeypoint(int i)
 	_current = _keypoints[i].start;
 	
 	double ave = aveSigma();
+	_reference->_current = _current;
+	_keypoints[i].density = ave;
+//	double rave = _reference->aveSigma();
+
 	if (ave < 0.0)
 	{
 		std::cout << "Skipping keypoint " << i << 
 		" for lack of density..." << std::endl;
 		return;
 	}
+	
+	std::cout << "Refining keypoint " << i << " (average sigma level " <<
+	ave << ")" << std::endl;
 
 	NelderMeadPtr neld = NelderMeadPtr(new RefinementNelderMead());
 	neld->setVerbose(true);
@@ -271,11 +374,16 @@ void DistortMap::refineKeypoint(int i)
 	neld->addParameter(&*az, Any::get, Any::set, 5, 0.1);
 
 	neld->refine();
+
+	_keypoints[i].correlation = -sscore();
 }
 
-void DistortMap::refineKeypoints(VagFFTPtr ref)
+void DistortMap::refineKeypoints(DistortMapPtr ref)
 {
 	std::cout << "Refining keypoints" << std::endl;
+	
+	std::cout << vec3_desc(_origin) << std::endl;
+	std::cout << vec3_desc(_reference->origin()) << std::endl;
 	
 	if (_keypoints.size() == 0)
 	{
@@ -284,14 +392,38 @@ void DistortMap::refineKeypoints(VagFFTPtr ref)
 
 	_reference = ref;
 	std::cout << "nns: " << nn() << " " << _nnMap.size() << std::endl;
+	std::cout << _keypoints.size() << " keypoints for " << _filename << "." << std::endl;
 
-	for (size_t i = 0; i < _keypoints.size(); i++)
+	for (size_t n = 0; n < 2; n++)
 	{
-		refineKeypoint(i);
+		for (size_t i = 0; i < _keypoints.size(); i++)
+		{
+			refineKeypoint(i);
+		}
 	}
 }
 
-void DistortMap::writeMRC(std::string filename)
+void DistortMap::writeAuxiliary(std::string filename)
+{
+	std::string auxfile = getBaseFilenameWithPath(filename) + ".aux";
+	std::ofstream file;
+	file.open(auxfile);
+	
+	int val = _keypoints.size();
+	file.write(reinterpret_cast<char *>(&val), sizeof(int));
+
+	vec3 o = origin();
+	file.write(reinterpret_cast<char *>(&o), sizeof(vec3));
+
+	file.write(reinterpret_cast<char *>(&_distance), sizeof(double));
+
+	file.write(reinterpret_cast<char *>(&_keypoints[0]), 
+	           sizeof(Keypoint) * _keypoints.size());
+	
+	file.close();
+}
+
+void DistortMap::writeMRC(std::string filename, bool withDistortion)
 {
 	std::ofstream file;
 	file.open(filename);
@@ -342,6 +474,13 @@ void DistortMap::writeMRC(std::string filename)
 	for (size_t i = 0; i < nn(); i++)
 	{
 		double r = getReal(i);
+		
+		if (withDistortion)
+		{
+			vec3 frac = fracFromElement(i);
+			r = getCompFromFrac(frac, 0);
+		}
+
 		if (r > max) max = r;
 		if (r < min) min = r;
 	}
@@ -358,19 +497,31 @@ void DistortMap::writeMRC(std::string filename)
 	file.write(reinterpret_cast<char *>(&val), sizeof(int));
 	
 	val = 0;
-	for (size_t i = 0; i < 25; i++)
+	file.write(reinterpret_cast<char *>(&val), sizeof(int)); // byte 25
+	file.write(reinterpret_cast<char *>(&val), sizeof(int));
+	file.write(reinterpret_cast<char *>(&val), sizeof(int));
+	val = 20140;
+	file.write(reinterpret_cast<char *>(&val), sizeof(int));
+	val = 0;
+	
+	for (size_t i = 0; i < 21; i++)
 	{
 		file.write(reinterpret_cast<char *>(&val), sizeof(int));
 	}
 
+	float origin[3];
+	origin[0] = _origin.x;
+	origin[1] = _origin.y;
+	origin[2] = _origin.z;
+
+	file.write(reinterpret_cast<char *>(origin), sizeof(float) * 3);
+
 	val = 0;
-	file.write(reinterpret_cast<char *>(&val), sizeof(int));
-	file.write(reinterpret_cast<char *>(&val), sizeof(int));
-	file.write(reinterpret_cast<char *>(&val), sizeof(int));
 	file.write("MAP ", sizeof(char) * 4);
 	char fourfour = 0x44;
 	char null = 0x0;
 	file.write(reinterpret_cast<char *>(&fourfour), sizeof(char ));
+	fourfour = 0x41;
 	file.write(reinterpret_cast<char *>(&fourfour), sizeof(char ));
 	file.write(reinterpret_cast<char *>(&null), sizeof(char ));
 	file.write(reinterpret_cast<char *>(&null), sizeof(char ));
@@ -385,13 +536,192 @@ void DistortMap::writeMRC(std::string filename)
 	}
 
 	float *tempData = (float *)malloc(sizeof(float) * nn());
+
 	for (size_t i = 0; i < nn(); i++)
 	{
-		tempData[i] = getReal(i);
+		double r = getReal(i);
+		
+		if (withDistortion)
+		{
+			vec3 frac = fracFromElement(i);
+			r = getCompFromFrac(frac, 0);
+		}
+
+		tempData[i] = r;
 	}
 
 	file.write(reinterpret_cast<char *>(tempData), sizeof(float) * nn());
 	
+	if (!withDistortion)
+	{
+		writeAuxiliary(filename);
+	}
+	
+	std::cout << "Written file " << (withDistortion ? "with" : "") << 
+	" distortion." << std::endl;
+	
 	file.close();
 
 }
+
+void DistortMap::loadFromAuxiliary()
+{
+	if (_aux.length() == 0) return;
+
+	std::ifstream file;
+	file.open(_aux);
+	
+	int nKeypoints;
+	file.read(reinterpret_cast<char *>(&nKeypoints), sizeof(int));
+
+	vec3 o = empty_vec3();
+	file.read(reinterpret_cast<char *>(&o), sizeof(vec3));
+	setOrigin(o);
+
+	file.read(reinterpret_cast<char *>(&_distance), sizeof(double));
+
+	_keypoints.resize(nKeypoints);
+	file.read(reinterpret_cast<char *>(&_keypoints[0]), 
+	          sizeof(Keypoint) * nKeypoints);
+
+	file.close();
+
+//	prepareKeypoints();
+	std::cout << "Loaded keypoints from auxiliary." << std::endl;
+}
+
+void DistortMap::dropData()
+{
+	free(_data);
+	_data = NULL;
+}
+
+void DistortMap::maskWithAtoms(AtomGroupPtr atoms)
+{
+	_pdbMask.resize(nn());
+
+	for (size_t i = 0; i < atoms->atomCount(); i++)
+	{
+		AtomPtr a = atoms->atom(i);
+		vec3 pos = a->getAbsolutePosition();
+		vec3_subtract_from_vec3(&pos, _origin);
+		mat3x3_mult_vec(getRealBasis(), &pos);
+		
+		const int w = 10;
+
+		for (int z = -w; z < w; z++)
+		{
+			for (int y = -w; y < w; y++)
+			{
+				for (int x = -w; x < w; x++)
+				{
+					vec3 tmp = make_vec3(x + pos.x, y + pos.y, z + pos.z);
+					collapse(&tmp.x, &tmp.y, &tmp.z);
+					int ele = element(tmp.x, tmp.y, tmp.z);
+					_pdbMask[ele] = 1;
+				}
+			}
+		}
+	}
+}
+
+double DistortMap::rotateRoundCentre(mat3x3 rotation, vec3 add, 
+                                     DistortMapPtr other, double scale, 
+                                     bool write)
+{
+	fftwf_complex *tempData;
+
+	if (write)
+	{
+		tempData = (fftwf_complex *)fftwf_malloc(_nn * sizeof(FFTW_DATA_TYPE));
+		memset(tempData, 0, sizeof(FFTW_DATA_TYPE) * _nn);
+	}
+	mat3x3 transpose = mat3x3_transpose(rotation);
+	vec3 centre = make_vec3(0.5, 0.5, 0.5);
+
+	CorrelData cd = empty_CD();
+	double mean, sigma;
+	meanSigma(&mean, &sigma);
+	
+	for (int k = 0; k < _nz; k++)
+	{
+		for (int j = 0; j < _ny; j++)
+		{
+			for (int i = 0; i < _nx; i++)
+			{
+				long end = element(i, j, k);
+				
+				double r = getReal(end);
+				if ((r - mean) / sigma < 0 && !write)
+				{
+					continue;
+				}
+
+				vec3 ijk = make_vec3(i, j, k); /* in Voxels */
+				mat3x3_mult_vec(_realBasis, &ijk); /* to Angstroms */
+				vec3 orig = ijk;
+
+				if (other)
+				{
+					vec3_add_to_vec3(&orig, _origin); /* in Angstroms */
+					vec3_subtract_from_vec3(&orig, other->_origin); /*in Angstroms*/
+					mat3x3_mult_vec(other->_recipBasis, &orig); /* to Voxels */
+					collapse(&orig.x, &orig.y, &orig.z);
+					
+					int ele = other->element(orig.x, orig.y, orig.z);
+					if (!write && _focus && other->_pdbMask.size() && 
+					    other->_pdbMask[ele] == 0)
+					{
+						continue;
+					}
+				}
+
+				ijk = make_vec3(i, j, k); /* in Voxels */
+				mat3x3_mult_vec(_voxelToFrac, &ijk); /* to fractional */
+
+				vec3_subtract_from_vec3(&ijk, centre); /* in fractional */
+
+				mat3x3_mult_vec(transpose, &ijk); /* in fractional */
+				vec3_mult(&ijk, scale); /* unit-independent scale */
+				vec3_add_to_vec3(&ijk, centre); /* in fractional */
+
+				mat3x3_mult_vec(_toReal, &ijk); /* to Angstroms */
+
+				vec3_subtract_from_vec3(&ijk, add); /* in Angstroms */
+				mat3x3_mult_vec(_recipBasis, &ijk); /* to Voxels */
+
+				double r0 = cubic_interpolate(ijk, 0);
+				
+				if (other)
+				{
+					double r1 = other->cubic_interpolate(orig, 0);
+					add_to_CD(&cd, r0, r1);
+				}
+				
+				if (write)
+				{
+					tempData[end][0] = r0;
+					tempData[end][1] = cubic_interpolate(ijk, 1);
+				}
+			}
+		}
+	}
+	
+	if (!write)
+	{
+		return evaluate_CD(cd);
+	}
+
+	/* Loop through and convert data into amplitude and phase */
+	for (int n = 0; n < _nn; n++)
+	{
+		long m = finalIndex(n);
+		_data[m][0] = tempData[n][0];
+		_data[m][1] = tempData[n][1];
+	}
+
+	free(tempData);
+
+	return evaluate_CD(cd);
+}
+

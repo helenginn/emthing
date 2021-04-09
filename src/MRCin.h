@@ -20,8 +20,11 @@
 #define __em__MRCin__
 
 class MRCImage;
-#include <libsrc/shared_ptrs.h>
 #include <hcsrc/vec3.h>
+#include <boost/shared_ptr.hpp>
+
+class DistortMap; typedef boost::shared_ptr<DistortMap> DistortMapPtr;
+class VagFFT; typedef boost::shared_ptr<VagFFT> VagFFTPtr;
 
 class MRCin
 {
@@ -50,18 +53,25 @@ public:
 		return &_values[i * _nx * _ny];
 	}
 	
-	VagFFTPtr getVolume();
+	std::string auxFile()
+	{
+		return _aux;
+	}
+	
+	DistortMapPtr getVolume();
 private:
 	void cropLimits(VagFFTPtr original, vec3 *min, vec3 *max);
 	void process();
 	void prepareDataForImages();
 	std::string _filename;
+	std::string _aux;
 	std::vector<float> _values;
 	std::map<int, MRCImage *> _imageMap;
 
 	int _nx, _ny, _nz;
 	int _mode;
 	float _a, _b, _c;
+	float _ori[3];
 	long int _nn;
 	bool _success;
 	bool _volume;

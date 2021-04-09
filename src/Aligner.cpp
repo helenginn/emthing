@@ -80,6 +80,7 @@ mat3x3 Aligner::makeRotation(vec3 axis, double deg)
 	
 	mat3x3 rot = mat3x3_unit_vec_rotation(axis, deg2rad(deg));
 	mat3x3 tmp = mat3x3_mult_mat3x3(rot, basis);
+	mat3x3_scale(&tmp, -1, -1, -1);
 
 	return tmp;
 }
@@ -197,7 +198,11 @@ void Aligner::rotation()
 		for (double j = 0; j < 360; j += 15)
 		{
 			mat3x3 m = makeRotation(trial, j);
-			mat3x3_scale(&m, -1, -1, -1);
+
+			if (Control::valueForKey("invert-hand") == "true")
+			{
+				mat3x3_scale(&m, -1, -1, -1);
+			}
 			double cor = _v0->compareReciprocal(_v1, m);
 
 			if (best < cor)
@@ -237,39 +242,35 @@ void Aligner::align()
 	{
 		rotation();
 		mat3x3 r = result();
-		_ori1->rotateRoundCentre(r, empty_vec3(), VagFFTPtr(), 1, true);
+		_ori1->rotateRoundCentre(r, empty_vec3(), DistortMapPtr(), 1, true);
 		emit focusOnCentre();
-		altered()->drawSlice(-1, "drawreal_" + i_to_str(number()) + "_rot");
 	}
 
 	if (Control::valueForKey("align-translation") == "true")
 	{
 		translation();
-		vec3 origin = _ori1->origin();
-		vec3_add_to_vec3(&origin, _translation);
-		_ori1->setOrigin(origin);
+		_ori1->addToOrigin(_translation);
 	}
+
 
 	double cor = -_ori1->rotateRoundCentre(make_mat3x3(), empty_vec3(), _ori0); 
 	std::cout << "Rough correlation: " << cor << std::endl;
-	altered()->writeMRC("rough.mrc");
 	
 	if (Control::valueForKey("rigid-body") == "true")
 	{
+		_ori1->setFocus(true);
 		microAdjustments();
 		cor = -_ori1->rotateRoundCentre(make_mat3x3(), empty_vec3(), _ori0); 
-		altered()->drawSlice(-1, "drawreal_" + i_to_str(number()) + "_zadjust");
 		std::cout << "Adjusted correlation: " << cor << std::endl;
+		_ori1->setFocus(false);
 	}
 	
 	if (Control::valueForKey("distortion") == "true")
 	{
 		std::cout << "Keypoints: " << cor << std::endl;
 		altered()->refineKeypoints(_ori0);
-		altered()->drawSlice(-1, "drawreal_" + i_to_str(number()) + "_zkeypoints");
 		cor = -_ori1->rotateRoundCentre(make_mat3x3(), empty_vec3(), _ori0); 
 		std::cout << "Keypoint correlation: " << cor << std::endl;
-		altered()->writeMRC("keypoint.mrc");
 	}
 
 	emit resultReady();
@@ -292,16 +293,16 @@ void Aligner::microAdjustments()
 {
 	NelderMeadPtr neld = NelderMeadPtr(new RefinementNelderMead());
 	neld->setVerbose(true);
-	neld->setCycles(100);
+	neld->setCycles(50);
 	neld->setEvaluationFunction(Aligner::score, this);
 	neld->setJobName("rigid_body");
 
 	AnyPtr ax = AnyPtr(new Any(&_microTrans.x));
-	neld->addParameter(&*ax, Any::get, Any::set, 2, 0.1);
+	neld->addParameter(&*ax, Any::get, Any::set, 5, 0.1);
 	AnyPtr ay = AnyPtr(new Any(&_microTrans.y));
-	neld->addParameter(&*ay, Any::get, Any::set, 2, 0.1);
+	neld->addParameter(&*ay, Any::get, Any::set, 5, 0.1);
 	AnyPtr az = AnyPtr(new Any(&_microTrans.z));
-	neld->addParameter(&*az, Any::get, Any::set, 2, 0.1);
+	neld->addParameter(&*az, Any::get, Any::set, 5, 0.1);
 
 	AnyPtr rx = AnyPtr(new Any(&_microAngles.x));
 	neld->addParameter(&*rx, Any::get, Any::set, deg2rad(3), deg2rad(0.01));
