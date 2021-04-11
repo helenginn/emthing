@@ -52,13 +52,14 @@ Aligner::Aligner(DistortMapPtr v1, DistortMapPtr v2) : Icosahedron()
 	setColour(0.5, 0.5, 0.5);
 }
 
-VagFFTPtr Aligner::subset(VagFFTPtr fft)
+DistortMapPtr Aligner::subset(VagFFTPtr fft)
 {
 	int nx = 10;
 	int ny = 10;
 	int nz = 10;
 
-	VagFFTPtr sub = fft->subFFT(-nx, nx, -ny, ny, -nz, nz);
+	VagFFTPtr vagsub = fft->subFFT(-nx, nx, -ny, ny, -nz, nz);
+	DistortMapPtr sub = DistortMapPtr(new DistortMap(*vagsub));
 	sub->flipCentre();
 
 	return sub;
@@ -106,8 +107,8 @@ vec3 colour(double score)
 
 void Aligner::translation()
 {
-	_v0 = VagFFTPtr(new VagFFT(*_ori0));
-	_v1 = VagFFTPtr(new VagFFT(*_ori1));
+	_v0 = DistortMapPtr(new DistortMap(*_ori0));
+	_v1 = DistortMapPtr(new DistortMap(*_ori1));
 	
 	VagFFTPtr copy0 = VagFFTPtr(new VagFFT(*_v0));
 	
@@ -258,13 +259,24 @@ void Aligner::align()
 	
 	if (Control::valueForKey("rigid-body") == "true")
 	{
-		_ori1->setFocus(true);
-		microAdjustments();
-		cor = -_ori1->rotateRoundCentre(make_mat3x3(), empty_vec3(), _ori0); 
-		std::cout << "Adjusted correlation: " << cor << std::endl;
-		_ori1->setFocus(false);
+		_v1->setFocus(true);
+		
+		double resol = 4;
+		int cycles = 80;
+		float threshold = -2;
+		for (size_t i = 0; i < 3; i++)
+		{
+			_v1->setThreshold(threshold);
+			microAdjustments(resol, cycles);
+			cor = -_ori1->rotateRoundCentre(make_mat3x3(), empty_vec3(), _ori0); 
+			std::cout << "Adjusted correlation: " << cor << std::endl;
+			resol /= 2;
+			cycles /= 2;
+			threshold += 1;
+		}
+		_v1->setFocus(false);
 	}
-	
+
 	if (Control::valueForKey("distortion") == "true")
 	{
 		std::cout << "Keypoints: " << cor << std::endl;
@@ -280,38 +292,61 @@ void Aligner::finishRefinement()
 {
 	vec3 trans = _microTrans;
 	mat3x3 rot = mat3x3_rotate(_microAngles.x, _microAngles.y, _microAngles.z);
+	std::cout << "Angles: " << mat3x3_desc(rot) << std::endl;
+
+	_v1->rotateRoundCentre(rot, empty_vec3(), _v0, _scale, true); 
+	_v1->addToOrigin(trans);
+	double bincor = -_v1->rotateRoundCentre(make_mat3x3(), empty_vec3(), _v0); 
+	std::cout << "Binned correlation: " << bincor << std::endl;
 
 	double correl = _ori1->rotateRoundCentre(rot, trans, _ori0, _scale, true);
 	correl = _ori1->rotateRoundCentre(make_mat3x3(), empty_vec3(), _ori0);
-	std::cout << "Interim correlation: " << correl << std::endl;
 	_microAngles = empty_vec3();
 	_microTrans = empty_vec3();
 	_scale = 1;
 }
 
-void Aligner::microAdjustments()
+void Aligner::binToTargetDim(float dim)
 {
+	int bin = _ori0->bestBin(dim);
+	_v0 = _ori0->binned(bin);
+	bin = _ori1->bestBin(dim);
+	_v1 = _ori1->binned(bin);
+	
+	std::cout << "Binned to approx. " << dim << " Angstroms." << std::endl;
+}
+
+void Aligner::microAdjustments(double resol, int cycles)
+{
+	binToTargetDim(resol);
+
 	NelderMeadPtr neld = NelderMeadPtr(new RefinementNelderMead());
 	neld->setVerbose(true);
-	neld->setCycles(50);
+	neld->setCycles(cycles);
 	neld->setEvaluationFunction(Aligner::score, this);
 	neld->setJobName("rigid_body");
 
 	AnyPtr ax = AnyPtr(new Any(&_microTrans.x));
-	neld->addParameter(&*ax, Any::get, Any::set, 5, 0.1);
+	neld->addParameter(&*ax, Any::get, Any::set, resol, 0.1);
 	AnyPtr ay = AnyPtr(new Any(&_microTrans.y));
-	neld->addParameter(&*ay, Any::get, Any::set, 5, 0.1);
+	neld->addParameter(&*ay, Any::get, Any::set, resol, 0.1);
 	AnyPtr az = AnyPtr(new Any(&_microTrans.z));
-	neld->addParameter(&*az, Any::get, Any::set, 5, 0.1);
+	neld->addParameter(&*az, Any::get, Any::set, resol, 0.1);
+	
+	double ang = deg2rad(1) * resol;
 
 	AnyPtr rx = AnyPtr(new Any(&_microAngles.x));
-	neld->addParameter(&*rx, Any::get, Any::set, deg2rad(3), deg2rad(0.01));
+	neld->addParameter(&*rx, Any::get, Any::set, ang, deg2rad(0.01));
 	AnyPtr ry = AnyPtr(new Any(&_microAngles.y));
-	neld->addParameter(&*ry, Any::get, Any::set, deg2rad(3), deg2rad(0.01));
+	neld->addParameter(&*ry, Any::get, Any::set, ang, deg2rad(0.01));
 	AnyPtr rz = AnyPtr(new Any(&_microAngles.z));
-	neld->addParameter(&*rz, Any::get, Any::set, deg2rad(3), deg2rad(0.01));
+	neld->addParameter(&*rz, Any::get, Any::set, ang, deg2rad(0.01));
+
 	AnyPtr s = AnyPtr(new Any(&_scale));
-	neld->addParameter(&*s, Any::get, Any::set, 0.05, 0.001);
+	if (resol <= 1.0001)
+	{
+		neld->addParameter(&*s, Any::get, Any::set, 0.01, 0.0005);
+	}
 
 	std::cout << "Starting microadjustments..." << std::endl;
 	neld->refine();
@@ -323,6 +358,6 @@ double Aligner::adjustScore()
 	vec3 trans = _microTrans;
 	mat3x3 rot = mat3x3_rotate(_microAngles.x, _microAngles.y, _microAngles.z);
 
-	double cor = -_ori1->rotateRoundCentre(rot, trans, _ori0, _scale); 
+	double cor = -_v1->rotateRoundCentre(rot, trans, _v0, _scale); 
 	return cor;
 }

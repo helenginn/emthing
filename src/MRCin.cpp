@@ -131,11 +131,11 @@ void MRCin::process()
 	}
 
 	file.seekg(1024);
-	std::cout << "Reading data..." << std::endl;
+	std::cout << "Reading data... " << std::flush;
 	
 	if (_mode != 2)
 	{
-		std::cout << "Unsupported type" << std::endl;
+		std::cout << "Unsupported MODE in header! I will crash" << std::endl;
 		_success = false;
 		return;
 	}
@@ -150,7 +150,7 @@ void MRCin::process()
 	file.read(reinterpret_cast<char *>(&_values[0]), _nn * sizeof(float));
 
 	file.close();
-	std::cout << "Read data." << std::endl;
+	std::cout << "read data." << std::endl;
 }
 
 void MRCin::prepareDataForImages()
@@ -274,11 +274,8 @@ DistortMapPtr MRCin::getVolume()
 		max = vec3_add_vec3(middle, keep);
 	}
 
-	std::cout << "Minimum: " << vec3_desc(min) << std::endl;
-	std::cout << "Maximum: " << vec3_desc(max) << std::endl;
-
-	std::cout << "From " << min.x << " " << min.y << " " << min.z << " to "
-	<< max.x << " " << max.y << " " << max.z << std::endl;
+	std::cout << "Minimum: " << vec3_desc(min);
+	std::cout << " to maximum: " << vec3_desc(max) << std::endl;
 	
 	VagFFTPtr sub = fft->subFFT(min.x, max.x, min.y, max.y, min.z, max.z);
 	sub->setStatus(FFTRealSpace);

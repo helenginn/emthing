@@ -29,25 +29,28 @@
 #include <fstream>
 #include <fftw3.h>
 
-DistortMap::DistortMap(int nx, int ny, int nz, int nele, int scratches)
-: VagFFT(nx, ny, nz, nele, scratches)
+void DistortMap::initialise()
 {
+	_threshold = -2.0;
 	_vString = Structure_vsh();
 	_fString = Structure_fsh();
 	_ico = new Icosahedron();
-	_trans = empty_vec3();
 	_ico->setColour(1., 0., 0);
 	_distance = 50;
 	_focus = false;
+	_current = empty_vec3();
+	_r = 0; _g = 0; _b = 0;
+}
+
+DistortMap::DistortMap(int nx, int ny, int nz, int nele, int scratches)
+: VagFFT(nx, ny, nz, nele, scratches)
+{
+	initialise();
 }
 
 DistortMap::DistortMap(VagFFT &fft, int scratch) : VagFFT(fft, scratch)
 {
-	_vString = Structure_vsh();
-	_fString = Structure_fsh();
-	_ico = new Icosahedron();
-	_ico->setColour(1., 0., 0);
-	_distance = 50;
+	initialise();
 }
 
 void DistortMap::addIcosahedron()
@@ -652,7 +655,7 @@ double DistortMap::rotateRoundCentre(mat3x3 rotation, vec3 add,
 				long end = element(i, j, k);
 				
 				double r = getReal(end);
-				if ((r - mean) / sigma < 0 && !write)
+				if ((r - mean) / sigma < _threshold && !write)
 				{
 					continue;
 				}
@@ -725,3 +728,84 @@ double DistortMap::rotateRoundCentre(mat3x3 rotation, vec3 add,
 	return evaluate_CD(cd);
 }
 
+DistortMapPtr DistortMap::binned(int bin)
+{
+	if (bin > 0 && (_nx % bin != 0 || _ny % bin != 0 || _nz % bin != 0)) 
+	{
+		std::cout << "Warning: binning " << bin << "not exactly "\
+		" compatible with dimensions " << _nx << " " << _ny << " " << _nz
+		<< std::endl;
+	}
+
+	int mx = _nx / bin;
+	int my = _ny / bin;
+	int mz = _nz / bin;
+
+	float divide = bin * bin * bin;
+
+	DistortMapPtr newMap = DistortMapPtr(new DistortMap(mx, my, mz, 0, 0));
+	newMap->setOrigin(origin());
+	
+	for (size_t z = 0; z < nz(); z += bin)
+	{
+		for (size_t y = 0; y < ny(); y += bin)
+		{
+			for (size_t x = 0; x < nx(); x += bin)
+			{
+				float total = 0;
+
+				for (size_t k = 0; k < bin; k++)
+				{
+					for (size_t j = 0; j < bin; j++)
+					{
+						for (size_t i = 0; i < bin; i++)
+						{
+							float value = getReal(x + i, y + j, z + k);
+							total += value;
+						}
+					}
+				}
+				
+				total /= divide;
+				
+				int element = newMap->element(x / bin, y / bin, z / bin);
+				newMap->setReal(element, total);
+			}
+		}
+	}
+	
+	double vox = (bin - 1) / 2;
+	vec3 hs = make_vec3(vox, vox, vox);
+	newMap->setUnitCell(getUnitCell());
+	newMap->setStatus(FFTRealSpace);
+
+	mat3x3_mult_vec(newMap->getRealBasis(), &hs);
+	vec3_mult(&hs, +1);
+	newMap->addToOrigin(hs);
+	
+	
+	return newMap;
+}
+
+int DistortMap::bestBin(float target)
+{
+	double dim = getCubicScale() / (float)_nx;
+	double smallest = FLT_MAX;
+	int bin = 1;
+	
+	for (size_t i = 0; i < 5; i++)
+	{
+		double diff = fabs(dim * (1 << i) - target);
+		
+		if (diff < smallest)
+		{
+			smallest = diff;
+			bin = (1 << i);
+		}
+	}
+	
+	std::cout << "Best binning for " << _filename << " to reach approx. " <<
+	target << " Angstroms is " << bin << std::endl;
+
+	return bin;
+}

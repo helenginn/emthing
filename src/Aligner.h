@@ -61,8 +61,9 @@ signals:
 private:
 	void rotation();
 	void translation();
-	void microAdjustments();
+	void microAdjustments(double resol, int cycles);
 	void finishRefinement();
+	void binToTargetDim(float dim);
 	
 	static double score(void *object)
 	{
@@ -72,9 +73,9 @@ private:
 
 	double adjustScore();
 
-	VagFFTPtr subset(VagFFTPtr fft);
+	DistortMapPtr subset(VagFFTPtr fft);
 	mat3x3 makeRotation(vec3 axis, double deg);
-	VagFFTPtr _v0, _v1;
+	DistortMapPtr _v0, _v1;
 	DistortMapPtr _ori0, _ori1;
 	
 	mat3x3 _result;

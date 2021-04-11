@@ -88,6 +88,14 @@ public:
 	{
 		_reference = ref;
 	}
+	
+	void setThreshold(float threshold)
+	{
+		_threshold = threshold;
+	}
+
+	int bestBin(float target);
+	DistortMapPtr binned(int bin);
 
 	double rotateRoundCentre(mat3x3 reindex, vec3 add, 
 	                         DistortMapPtr other = DistortMapPtr(), 
@@ -122,7 +130,8 @@ private:
 	double _distance;
 	double _r, _g, _b;
 	DistortMapPtr _reference;
-	vec3 _trans;
+	void initialise();
+	float _threshold;
 	
 	std::vector<int> _pdbMask;
 };
