@@ -84,6 +84,8 @@ void DistortMap::makeKeypoints(double d)
 				Keypoint kp;
 				kp.start = pos;
 				kp.shift = empty_vec3();
+				kp.density = 0;
+				kp.correlation = 0;
 
 				kp.vertex = vertexCount();
 				_ico->setPosition(pos);
@@ -255,8 +257,8 @@ double DistortMap::correlateKeypoints(DistortMapPtr other)
 		
 		double correl = _keypoints[i].correlation;
 
-		vec3_mult(&my_mot, correl);
-		vec3_mult(&other_mot, correl);
+//		vec3_mult(&my_mot, density);
+//		vec3_mult(&other_mot, density);
 		
 		double dot = vec3_dot_vec3(my_mot, other_mot);
 		dots += dot;
@@ -384,9 +386,6 @@ void DistortMap::refineKeypoint(int i)
 void DistortMap::refineKeypoints(DistortMapPtr ref)
 {
 	std::cout << "Refining keypoints" << std::endl;
-	
-	std::cout << vec3_desc(_origin) << std::endl;
-	std::cout << vec3_desc(_reference->origin()) << std::endl;
 	
 	if (_keypoints.size() == 0)
 	{
@@ -630,7 +629,7 @@ void DistortMap::maskWithAtoms(AtomGroupPtr atoms)
 
 double DistortMap::rotateRoundCentre(mat3x3 rotation, vec3 add, 
                                      DistortMapPtr other, double scale, 
-                                     bool write)
+                                     bool write, bool useCentroid)
 {
 	fftwf_complex *tempData;
 
@@ -641,6 +640,11 @@ double DistortMap::rotateRoundCentre(mat3x3 rotation, vec3 add,
 	}
 	mat3x3 transpose = mat3x3_transpose(rotation);
 	vec3 centre = make_vec3(0.5, 0.5, 0.5);
+	
+	if (useCentroid)
+	{
+		centre = fractionalCentroid();
+	}
 
 	CorrelData cd = empty_CD();
 	double mean, sigma;
@@ -730,7 +734,7 @@ double DistortMap::rotateRoundCentre(mat3x3 rotation, vec3 add,
 
 DistortMapPtr DistortMap::binned(int bin)
 {
-	if (bin > 0 && (_nx % bin != 0 || _ny % bin != 0 || _nz % bin != 0)) 
+	if (false && bin > 0 && (_nx % bin != 0 || _ny % bin != 0 || _nz % bin != 0)) 
 	{
 		std::cout << "Warning: binning " << bin << "not exactly "\
 		" compatible with dimensions " << _nx << " " << _ny << " " << _nz
@@ -783,7 +787,6 @@ DistortMapPtr DistortMap::binned(int bin)
 	vec3_mult(&hs, +1);
 	newMap->addToOrigin(hs);
 	
-	
 	return newMap;
 }
 
@@ -804,8 +807,5 @@ int DistortMap::bestBin(float target)
 		}
 	}
 	
-	std::cout << "Best binning for " << _filename << " to reach approx. " <<
-	target << " Angstroms is " << bin << std::endl;
-
 	return bin;
 }

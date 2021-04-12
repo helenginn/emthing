@@ -32,6 +32,7 @@ VolumeView::VolumeView(QWidget *parent) : QMainWindow(parent)
 	_display->setFocusPolicy(Qt::ClickFocus);
 	_display->show();
 
+	VagFFT::setThreads(1);
 }
 
 void VolumeView::addCommand(std::string command)

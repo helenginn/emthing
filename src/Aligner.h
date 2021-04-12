@@ -25,33 +25,44 @@
 class VagFFT; typedef boost::shared_ptr<VagFFT> VagFFTPtr;
 class Any; typedef boost::shared_ptr<Any> AnyPtr;
 class DistortMap; typedef boost::shared_ptr<DistortMap> DistortMapPtr;
+class Symmetry;
 
 class Aligner : public QObject, public Icosahedron
 {
 Q_OBJECT
 public:
 	Aligner(DistortMapPtr v1, DistortMapPtr v2);
+	~Aligner();
 
 	mat3x3 &result()
 	{
 		return _result;
 	}
 
-	void setFFTNumber(int i)
+	DistortMapPtr reference()
 	{
-		_num = i;
+		return _ori0;
 	}
-	
-	int number()
-	{
-		return _num;
-	}
-	
+
 	DistortMapPtr altered()
 	{
 		return _ori1;
 	}
+	
+	size_t symScoreCount()
+	{
+		return _symScores.size();
+	}
+	
+	double symScore(int i)
+	{
+		return _symScores[i];
+	}
+	
+	double symRatio();
 
+	void removeTrials(mat3x3 rot, double rad);
+	void setSymmetry(std::string filename);
 public slots:
 	void align();
 
@@ -61,7 +72,9 @@ signals:
 private:
 	void rotation();
 	void translation();
-	void microAdjustments(double resol, int cycles);
+	void bestSymmetry();
+	void microAdjustments(double resol, int cycles, double threshold);
+	void refineAdjustments(double resol, int cycles);
 	void finishRefinement();
 	void binToTargetDim(float dim);
 	
@@ -81,11 +94,15 @@ private:
 	mat3x3 _result;
 	vec3 _translation;
 
+	bool forbidden(mat3x3 m);
 	double _scale;
+	std::vector<mat3x3> _forbidden;
+	std::vector<double> _forbidAngles;
 	vec3 _microTrans;
 	vec3 _microAngles;
-	std::vector<AnyPtr> _anys;
-	int _num;
+
+	Symmetry *_sym;
+	std::vector<double> _symScores;
 };
 
 #endif

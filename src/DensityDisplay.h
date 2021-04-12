@@ -43,7 +43,13 @@ public:
 		_dictator = dict;
 	}
 	
-	void alignLast();
+	void setSymFile(std::string str)
+	{
+		_symFile = str;
+	}
+	
+	void findReferenceBySymmetry();
+	void alignLastTo(std::string name);
 	void writeLast(std::string filename);
 	void pictureLast(std::string filename);
 	void correlateLast();
@@ -51,9 +57,9 @@ public:
 	void loadFromFileList(std::string filename);
 	void maskWithPDB(std::string pdb);
 	void dropData();
+	void setAsReference(std::string name);
 public slots:
 	void centre();
-	void alignDensities();
 	void done();
 signals:
 	void begin();
@@ -67,14 +73,22 @@ private:
 	void rightClickMenu(QPoint p);
 	std::vector<Density2GL *> _densities;
 	std::vector<DistortMapPtr> _ffts;
+	std::vector<DistortMapPtr> _refs;
+	std::map<std::string, DistortMapPtr> _name2Ref;
+	std::map<DistortMapPtr, std::string> _ref2Name;
+	std::map<DistortMapPtr, DistortMapPtr> _fft2Ref;
+	std::map<std::string, double> _scores;
 	std::vector<Aligner *> _alignables;
+	
+	std::string _symFile;
 	Density2GL * _density;
 	Icosahedron *_ico;
-	DistortMapPtr _fft;
 	QThread *_worker;
 	Trace *_activeTrace;
 	Aligner *_align;
 	Dictator *_dictator;
+	
+	bool _allRefs;
 
 };
 

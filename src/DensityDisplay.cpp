@@ -35,6 +35,7 @@
 
 DensityDisplay::DensityDisplay(QWidget *parent) : SlipGL(parent)
 {
+	_allRefs = false;
 	_activeTrace = NULL;
 	_align = NULL;
 	_ico = new Icosahedron();
@@ -48,7 +49,6 @@ DensityDisplay::DensityDisplay(QWidget *parent) : SlipGL(parent)
 
 void DensityDisplay::addDensity(DistortMapPtr vagfft)
 {
-	_fft = vagfft;
 	_density = new Density2GL();
 	_density->setDims(30, 30, 30);
 	_density->setResolution(1.0);
@@ -63,29 +63,28 @@ void DensityDisplay::addDensity(DistortMapPtr vagfft)
 	float s = 80;
 	float v = 100;
 	hsv_to_rgb(h, s, v);
-	_fft->setColour(h, s, v);
+	vagfft->setColour(h, s, v);
 
 	_density->setDefaultColour(h, s, v);
-	_density->makeNewDensity(_fft);
-	addObject(&*_fft);
+	_density->makeNewDensity(vagfft);
+	addObject(&*vagfft);
 
 	addObject(_density);
 	_densities.push_back(_density);
-	_ffts.push_back(_fft);
+	_ffts.push_back(vagfft);
 
 	if (_ffts.size() >= 2)
 	{
-		_fft->setReference(_ffts[0]);
+		vagfft->setReference(_ffts[0]);
 	}
 	
-	if (_fft->hasAuxiliary())
+	if (vagfft->hasAuxiliary())
 	{
-		_fft->loadFromAuxiliary();
+		vagfft->loadFromAuxiliary();
 	}
 	else
 	{
-		mat3x3 toReal = _fft->toReal();
-		std::cout << mat3x3_desc(toReal) << std::endl;
+		mat3x3 toReal = vagfft->toReal();
 		mat3x3 target = _ffts[0]->toReal();
 		
 		vec3 targo = _ffts[0]->origin();
@@ -94,7 +93,7 @@ void DensityDisplay::addDensity(DistortMapPtr vagfft)
 		                                  target.vals[8] / 2);
 		vec3_add_to_vec3(&centre_of_target, targo);
 		
-		vec3 myo = _fft->origin();
+		vec3 myo = vagfft->origin();
 		vec3 my_centre = make_vec3(toReal.vals[0] / 2,
 		                           toReal.vals[4] / 2,
 		                           toReal.vals[8] / 2);
@@ -102,12 +101,7 @@ void DensityDisplay::addDensity(DistortMapPtr vagfft)
 
 		vec3 oriplus = vec3_subtract_vec3(centre_of_target, my_centre);
 
-		_fft->addToOrigin(oriplus);
-	}
-
-	if (_ffts.size() == 1)
-	{
-		centre();
+		vagfft->addToOrigin(oriplus);
 	}
 }
 
@@ -154,13 +148,54 @@ void DensityDisplay::done()
 	
 	if (_align != NULL)
 	{
-		removeObject(_align);
+		if (_allRefs)
+		{
+			DistortMapPtr ref = _align->reference();
+			std::string name = _ref2Name[ref];
+			
+			std::cout << "RESULTS for " << _align->altered()->filename() << 
+			" against " << name << ":" << std::endl;
+
+			for (size_t i = 0; i < _align->symScoreCount(); i++)
+			{
+				std::cout << "\tSymmetry operator " << i + 1 << " has "
+				"correlation of " << _align->symScore(i) << std::endl;
+			}
+			
+			double ratio = _align->symRatio();
+			std::cout << "Best score: " << ratio << std::endl;
+			std::cout << std::endl;
+
+			_scores[name] = ratio;
+		}
 
 		if (_alignables.size() > 0)
 		{
 			_alignables.erase(_alignables.begin());
 		}
+		
+		if (_allRefs && _alignables.size() == 0)
+		{
+			std::cout << "Final result: " << std::endl;
+			double best = 0;
+			int num = 0;
+			for (size_t i = 0; i < _refs.size(); i++)
+			{
+				std::string name = _ref2Name[_refs[i]];
+				if (_scores[name] > best)
+				{
+					best = _scores[name];
+					num = i;
+				}
+			}
 
+			std::cout << _align->altered()->filename() << " matches " <<
+			_ref2Name[_refs[num]] << " best." << std::endl;
+			std::cout << std::endl;
+			_allRefs = false;
+		}
+
+		removeObject(_align);
 		delete _align;
 		_align = NULL;
 		startNextAlignment();
@@ -169,6 +204,7 @@ void DensityDisplay::done()
 
 void DensityDisplay::startNextAlignment()
 {
+	std::cout << "Alignments left to do: " << _alignables.size() << std::endl;
 	if (_alignables.size() == 0)
 	{
 		_dictator->incrementJob();
@@ -187,40 +223,63 @@ void DensityDisplay::startNextAlignment()
 	emit begin();
 }
 
-void DensityDisplay::alignLast()
+void DensityDisplay::alignLastTo(std::string name)
 {
-	if (_ffts.size() <= 1)
+	DistortMapPtr ref;
+	if (name == "" && _fft2Ref.count(_ffts.back()))
 	{
-		std::cout << "Only one FFT." << std::endl;
+		ref = _fft2Ref[_ffts.back()];
+	}
+	else if (name == "" && _refs.size() > 0)
+	{
+		ref = _refs[0];
+	}
+	else if (name == "" && _refs.size() == 0)
+	{
+		ref = _ffts[0];
+	}
+	else
+	{
+		ref = _name2Ref[name];
+	}
+
+	if (_ffts.size() == 0)
+	{
+		std::cout << "No non-reference FFTs" << std::endl;
 		return;
 	}
 	
 	focusOnPosition(empty_vec3(), 100);
 	
-	_align = new Aligner(_ffts[0], _ffts.back());
-	_align->setFFTNumber(_ffts.size() - 1);
+	if (!ref)
+	{
+		std::cout << "Reference by name " << name << " does not exist, "
+		"declare a reference first after loading a map." << std::endl;
+		exit(1);
+	}
+	
+	_align = new Aligner(ref, _ffts.back());
+	_align->setSymmetry(_symFile);
 	_alignables.push_back(_align);
 	
 	startNextAlignment();
-
 }
 
-void DensityDisplay::alignDensities()
+void DensityDisplay::findReferenceBySymmetry()
 {
-	if (_ffts.size() <= 1)
+	std::cout << "Comparing to references: " << std::endl;
+	for (size_t i = 0; i < _refs.size(); i++)
 	{
-		return;
-	}
-	
-	focusOnPosition(empty_vec3(), 100);
-	
-	for (size_t i = 1; i < _ffts.size(); i++)
-	{
-		_align = new Aligner(_ffts[0], _ffts[i]);
-		_align->setFFTNumber(i);
+		DistortMapPtr map = DistortMapPtr(new DistortMap(*_ffts.back()));
+		_align = new Aligner(_refs[i], map);
+		_align->setSymmetry(_symFile);
+		std::cout << _ref2Name[_refs[i]] << ", " << std::endl;
+
 		_alignables.push_back(_align);
 	}
-	
+	std::cout << "..." << std::endl;
+
+	_allRefs = true;
 	startNextAlignment();
 }
 
@@ -243,7 +302,7 @@ bool DensityDisplay::prepareWorkForObject(QObject *object)
 
 	if (_worker && _worker->isRunning())
 	{
-		std::cout << "Waiting for worker to finish old job" << std::endl;
+		std::cout << "Waiting for worker to finish old job first" << std::endl;
 		_worker->wait();
 	}
 	
@@ -336,7 +395,23 @@ void DensityDisplay::loadFromFileList(std::string filename)
 		fft->setAuxiliary(auxfile);
 		fft->loadFromAuxiliary();
 		
-		_fft = fft;
 		_ffts.push_back(fft);
 	}
+}
+
+void DensityDisplay::setAsReference(std::string name)
+{
+	if (_ffts.size() == 0)
+	{
+		std::cout << "Want to set last density as reference, but "
+		"no maps loaded!" << std::endl;
+		return;
+	}
+
+	DistortMapPtr fft = _ffts.back();
+	_ffts.pop_back();
+	_refs.push_back(fft);
+	
+	_name2Ref[name] = fft;
+	_ref2Name[fft] = name;
 }

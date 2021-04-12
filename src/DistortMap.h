@@ -99,7 +99,8 @@ public:
 
 	double rotateRoundCentre(mat3x3 reindex, vec3 add, 
 	                         DistortMapPtr other = DistortMapPtr(), 
-	                         double scale = 1, bool write = false);
+	                         double scale = 1, bool write = false,
+	                         bool useCentroid = false);
 private:
 	vec3 motion(vec3 real, std::vector<Keypoint *> &points, double *weights);
 	void refineKeypoint(int i);

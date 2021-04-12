@@ -25,9 +25,9 @@ Control::Control() : Dictator::Dictator()
 {
 	_properties["align-rotation"] = "true";
 	_properties["align-translation"] = "true";
-	_properties["crop-fraction"] = "true";
 	_properties["make-plans"] = "true";
 	_properties["write-distortion"] = "false";
+	_properties["crop-dimension"] = "0";
 
 }
 
@@ -54,7 +54,11 @@ bool Control::processRequest(std::string first, std::string last)
 	{
 		_properties[first] = last;
 	}
-	else if (first == "crop-fraction")
+	else if (first == "symmetry-operators")
+	{
+		_display->setSymFile(last);
+	}
+	else if (first == "crop-dimension")
 	{
 		_properties[first] = last;
 	}
@@ -74,6 +78,15 @@ bool Control::processRequest(std::string first, std::string last)
 	else if (first == "load-map")
 	{
 		_view->addMRCin(last);
+	}
+	else if (first == "make-reference")
+	{
+		_display->setAsReference(last);
+	}
+	else if (first == "find-best-reference")
+	{
+		_display->findReferenceBySymmetry();
+		return false;
 	}
 	else if (first == "write-last")
 	{
@@ -105,7 +118,12 @@ bool Control::processRequest(std::string first, std::string last)
 	}
 	else if (first == "align-last")
 	{
-		_display->alignLast();
+		_display->alignLastTo("");
+		return false;
+	}
+	else if (first == "align-last-to")
+	{
+		_display->alignLastTo(last);
 		return false;
 	}
 
@@ -149,13 +167,10 @@ void Control::help()
 
 	std::cout << "Command type: values" << std::endl;
 
-	std::cout << "\tcrop-fraction=<floating point>\t";
-	std::cout << "Determines the size of the box to crop incoming maps. ";
-	std::cout << "Numbers outside the range (0, 1) will result in ";
-	std::cout << "\n\t\t\t\t\t";
-	std::cout << "automatic determination according to signal levels. ";
-	std::cout << "Default is to automatically determine."
-	<< std::endl;
+	std::cout << "\tcrop-dimension=<floating point>\t";
+	std::cout << "Determines the size of the box to crop incoming maps ";
+	std::cout << "in Angstroms. Default 250 Ang.";
+	std::cout << std::endl;
 
 
 	std::cout << std::endl;

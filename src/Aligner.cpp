@@ -19,6 +19,7 @@
 #include "Aligner.h"
 #include "DistortMap.h"
 #include "Control.h"
+#include "Symmetry.h"
 #include <iostream>
 #include <hcsrc/Any.h>
 #include <hcsrc/FileReader.h>
@@ -26,6 +27,7 @@
 
 Aligner::Aligner(DistortMapPtr v1, DistortMapPtr v2) : Icosahedron()
 {
+	_sym = NULL;
 	_scale = 1;
 	_microTrans = empty_vec3();
 	_microAngles = empty_vec3();
@@ -65,6 +67,12 @@ DistortMapPtr Aligner::subset(VagFFTPtr fft)
 	return sub;
 }
 
+void Aligner::removeTrials(mat3x3 rot, double rad)
+{
+	_forbidden.push_back(rot);
+	_forbidAngles.push_back(rad);
+}
+
 mat3x3 Aligner::makeRotation(vec3 axis, double deg)
 {
 	vec3_set_length(&axis, 1);
@@ -81,7 +89,11 @@ mat3x3 Aligner::makeRotation(vec3 axis, double deg)
 	
 	mat3x3 rot = mat3x3_unit_vec_rotation(axis, deg2rad(deg));
 	mat3x3 tmp = mat3x3_mult_mat3x3(rot, basis);
-	mat3x3_scale(&tmp, -1, -1, -1);
+	
+	if (mat3x3_determinant(tmp) < 0)
+	{
+		mat3x3_scale(&tmp, -1, -1, -1);
+	}
 
 	return tmp;
 }
@@ -183,19 +195,39 @@ void Aligner::translation()
 	mat3x3 tr = _ori0->toReal();
 	mat3x3_mult_vec(tr, &pos);
 	_translation = pos;
-	
+}
+
+bool Aligner::forbidden(mat3x3 m)
+{
+	mat3x3 t = mat3x3_transpose(m);
+	for (size_t i = 0; i < _forbidden.size(); i++)
+	{
+		mat3x3 f = _forbidden[i];
+		f = mat3x3_mult_mat3x3(f, t);
+		double cosa = (f.vals[0] + f.vals[4] + f.vals[8]) / 3;
+		double angle = acos(cosa);
+		if (angle < _forbidAngles[i])
+		{
+			return true;
+		}
+	}
+
+	return false;
 }
 
 void Aligner::rotation()
 {
 	double bestest = 0;
 	mat3x3 b = make_mat3x3();
+	vec3 v = empty_vec3();
+	int forbid = 0;
 
 	for (size_t i = 0; i < _vertices.size(); i++)
 	{
 		double best = 0;
 
 		vec3 trial = vec_from_pos(_vertices[i].pos);
+
 		for (double j = 0; j < 360; j += 15)
 		{
 			mat3x3 m = makeRotation(trial, j);
@@ -204,6 +236,13 @@ void Aligner::rotation()
 			{
 				mat3x3_scale(&m, -1, -1, -1);
 			}
+			
+			if (forbidden(m))
+			{
+				forbid++;
+				continue;
+			}
+
 			double cor = _v0->compareReciprocal(_v1, m);
 
 			if (best < cor)
@@ -215,6 +254,7 @@ void Aligner::rotation()
 			{
 				bestest = cor;
 				b = m;
+				v = trial;
 			}
 		}
 
@@ -229,12 +269,43 @@ void Aligner::rotation()
 		_vertices[i].color[2] = c.z;
 		unlockMutex();
 	}
+	
+	if (forbid > 0)
+	{
+		std::cout << "Forbidden directions: " << forbid << std::endl;
+	}
 
 	std::cout << "Best orientation: " << std::endl
 	 << mat3x3_desc(b) << std::endl;
+	std::cout << "Starting vector: " << vec3_desc(v) << std::endl;
 	std::cout << "... score: " << bestest << std::endl;
 	_result = b;
 
+}
+
+void Aligner::bestSymmetry()
+{
+	double best = 0;
+	mat3x3 matrix = make_mat3x3();
+	
+	for (size_t i = 0; i < _sym->matrixCount(); i++)
+	{
+		binToTargetDim(4);
+		mat3x3 m = _sym->matrix(i);
+		_v1->rotateRoundCentre(m, empty_vec3(), _v0, 1, true);
+		refineAdjustments(4, 40);
+		double cor = _v1->rotateRoundCentre(make_mat3x3(), empty_vec3(), _v0);
+		std::cout << "Sym mate " << i << " correlation: " << cor << std::endl;
+		_symScores.push_back(cor);
+		
+		if (best < cor)
+		{
+			best = cor;
+			matrix = m;
+		}
+	}
+
+	_ori1->rotateRoundCentre(matrix, empty_vec3(), _ori0, 1, true); 
 }
 
 void Aligner::align()
@@ -253,9 +324,20 @@ void Aligner::align()
 		_ori1->addToOrigin(_translation);
 	}
 
-
-	double cor = -_ori1->rotateRoundCentre(make_mat3x3(), empty_vec3(), _ori0); 
+	double cor = _ori1->rotateRoundCentre(make_mat3x3(), empty_vec3(), _ori0); 
 	std::cout << "Rough correlation: " << cor << std::endl;
+	
+	if (_sym != NULL)
+	{
+		bestSymmetry();
+
+		double cor = _ori1->rotateRoundCentre(make_mat3x3(), empty_vec3(), _ori0); 
+		std::cout << "Best symmetry correlation: " << cor << std::endl;
+	}
+	else
+	{
+		_symScores.push_back(cor);
+	}
 	
 	if (Control::valueForKey("rigid-body") == "true")
 	{
@@ -266,8 +348,7 @@ void Aligner::align()
 		float threshold = -2;
 		for (size_t i = 0; i < 3; i++)
 		{
-			_v1->setThreshold(threshold);
-			microAdjustments(resol, cycles);
+			microAdjustments(resol, cycles, threshold);
 			cor = -_ori1->rotateRoundCentre(make_mat3x3(), empty_vec3(), _ori0); 
 			std::cout << "Adjusted correlation: " << cor << std::endl;
 			resol /= 2;
@@ -316,9 +397,8 @@ void Aligner::binToTargetDim(float dim)
 	std::cout << "Binned to approx. " << dim << " Angstroms." << std::endl;
 }
 
-void Aligner::microAdjustments(double resol, int cycles)
+void Aligner::refineAdjustments(double resol, int cycles)
 {
-	binToTargetDim(resol);
 
 	NelderMeadPtr neld = NelderMeadPtr(new RefinementNelderMead());
 	neld->setVerbose(true);
@@ -350,7 +430,31 @@ void Aligner::microAdjustments(double resol, int cycles)
 
 	std::cout << "Starting microadjustments..." << std::endl;
 	neld->refine();
+
+}
+
+void Aligner::microAdjustments(double resol, int cycles, double threshold)
+{
+	binToTargetDim(resol);
+	_v1->setThreshold(threshold);
+	refineAdjustments(resol, cycles);
 	finishRefinement();
+}
+
+Aligner::~Aligner()
+{
+	if (_sym != NULL)
+	{
+		delete _sym;
+	}
+}
+
+void Aligner::setSymmetry(std::string filename)
+{
+	if (filename.length())
+	{
+		_sym = new Symmetry(filename);
+	}
 }
 
 double Aligner::adjustScore()
@@ -360,4 +464,30 @@ double Aligner::adjustScore()
 
 	double cor = -_v1->rotateRoundCentre(rot, trans, _v0, _scale); 
 	return cor;
+}
+
+double Aligner::symRatio()
+{
+	if (_symScores.size() == 1)
+	{
+		return 1;
+	}
+
+	std::sort(_symScores.begin(), _symScores.end(), std::greater<double>());
+	return _symScores[0];
+	
+	if (_symScores[0] <= 0.15)
+	{
+		return 0;
+	}
+
+	double ave = 0;
+	for (size_t i = 1; i < _symScores.size(); i++)
+	{
+		ave += _symScores[i];
+	}
+
+	ave /= (_symScores.size());
+	
+	return _symScores[0] / ave;
 }

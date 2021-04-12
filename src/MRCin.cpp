@@ -102,9 +102,8 @@ void MRCin::process()
 	file.read(reinterpret_cast<char *>(&b), sizeof(float));
 	file.read(reinterpret_cast<char *>(&c), sizeof(float));
 	
-	std::cout << "Sampling: " << sx << " " << sy << " " << sz << std::endl;
 	_a = a / (float)sx; _b = b / (float)sy; _c = c / (float)sz;
-
+	
 	std::cout << "Cell edges (Å): " << _a << " " << _b << " " 
 	<< _c << std::endl;
 
@@ -236,11 +235,14 @@ DistortMapPtr MRCin::getVolume()
 		fft->setElement(i, _values[i], 0);
 	}
 	
+	vec3 centroid = fft->fractionalCentroid();
+	mat3x3_mult_vec(fft->toReal(), &centroid);
+
 	vec3 ori = make_vec3(_ori[0], _ori[1], _ori[2]);
 	fft->setOrigin(ori);
 	
-	double fraction = atof(Control::valueForKey("crop-fraction").c_str());
-	vec3 min, max;
+	double dim = atof(Control::valueForKey("crop-dimension").c_str());
+	vec3 half_size = make_vec3(dim / 2, dim / 2, dim / 2);
 	
 	if (_aux.length())
 	{
@@ -252,26 +254,24 @@ DistortMapPtr MRCin::getVolume()
 		dfft->setFilename(_filename);
 		return dfft;
 	}
-	if (fraction < 1e-6 || fraction > 1.00001)
+
+	vec3 min = vec3_subtract_vec3(centroid, half_size);
+	vec3 max = vec3_add_vec3(centroid, half_size);
+	mat3x3_mult_vec(fft->getRecipBasis(), &min);
+	mat3x3_mult_vec(fft->getRecipBasis(), &max);
+
+	if (min.x < 0) min.x = 0;
+	if (min.y < 0) min.y = 0;
+	if (min.z < 0) min.z = 0;
+	
+	if (max.x > fft->nx()) max.x = fft->nx();
+	if (max.y > fft->ny()) max.y = fft->ny();
+	if (max.z > fft->nz()) max.z = fft->nz();
+	
+	if (dim < 1e-6)
 	{
-		std::cout << "Cropping image: ";
-		std::cout << "determining crop limits automatically..." << std::endl;
-		cropLimits(fft, &min, &max);
-		vec3 diff = make_vec3(30, 30, 30);
-		vec3_subtract_from_vec3(&min, diff);
-		vec3_add_to_vec3(&max, diff);
-	}
-	else
-	{
-		std::cout << "Cropping image: ";
-		std::cout << "using fraction " << fraction << " ... " << std::endl;
-		vec3 size = make_vec3(fft->nx(), fft->ny(), fft->nz());
-		vec3 middle = size;
-		vec3_mult(&middle, 0.5);
-		vec3 keep = middle;
-		vec3_mult(&keep, fraction);
-		min = vec3_subtract_vec3(middle, keep);
-		max = vec3_add_vec3(middle, keep);
+		min = empty_vec3();
+		max = make_vec3(fft->nx(), fft->ny(), fft->nz());
 	}
 
 	std::cout << "Minimum: " << vec3_desc(min);
@@ -279,7 +279,6 @@ DistortMapPtr MRCin::getVolume()
 	
 	VagFFTPtr sub = fft->subFFT(min.x, max.x, min.y, max.y, min.z, max.z);
 	sub->setStatus(FFTRealSpace);
-	std::cout << "Cube length: " << sub->getCubicScale() / sub->nx() <<  std::endl;
 	DistortMapPtr dfft = DistortMapPtr(new DistortMap(*sub));
 	dfft->setFilename(_filename);
 	return dfft;
